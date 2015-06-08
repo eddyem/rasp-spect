@@ -1,5 +1,5 @@
 /*
- * client.c - functions for working with stepper motors by wiringPi
+ * stepper.c - functions for working with stepper motors by wiringPi
  *
  * Copyright 2015 Edward V. Emelianoff <eddy@sao.ru>
  *
@@ -25,6 +25,7 @@
 #include <string.h>			// memcpy
 #include <stdint.h>			// int types
 #include <sys/time.h>		// gettimeofday
+#define X_OPEN_SOURCE 999
 #include <unistd.h>			// usleep
 // use wiringPi on ARM & simple echo on PC (for tests)
 #ifdef __arm__
@@ -254,7 +255,7 @@ int get_motors_speed(){
 #ifdef __arm__
 	return stepspersec;
 #else // __arm__
-	return 0;
+	return 111;
 #endif // __arm__
 }
 

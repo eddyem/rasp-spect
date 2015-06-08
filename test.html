@@ -7,32 +7,6 @@
 	button { display: block; width: 70px; text-align: center; }
 	.container {border: solid 1px;  border-radius:10px; padding:12px; }
 </style>
-</head>
-<body onload="Global.init()">
-	<div class="container" id="cont">
-	<table class="content" id="tab">
-		<tr><td></td>
-			<td align='center'><button id='Y+'>Y+</button></td>
-		<td></td></tr>
-		<tr>
-			<td align='center'><button id='X-'>X-</button></td>
-			<td><button id='0'>0</button></td>
-			<td align='center'><button id='X+'>X+</button></td>
-		</tr>
-		<tr><td></td>
-			<td align='center'><button id='Y-'>Y-</button></td>
-		<td></td></tr>
-	</table>
-	<div class="content">
-		Speed: <input type="range" min="1" max="499" step="1" id="speed">
-		<span id="curspeed">000</span>
-	</div>
-	<p></p>
-	<div id = "connected">No connection</div>
-	<div><span id = "answer">A</span></div>
-	</div>
-	<div id="cntr"></div>
-	<img id="ws_image">
 <script>
 Global = function(){
 	var socket = null;
@@ -54,43 +28,79 @@ Global = function(){
 		u = u.split('/');
 		return pcol + u[0] + ":9999";
 	}
-var frames = 0, time = 0;
-function getcntr(){
-	time++;
-	if(connected)
-		$("cntr").innerHTML = frames/time;
-	setTimeout(getcntr, 1000);
-}
+	function send(){
+		imsocket.send("get");
+	}
+	var frames = 0, time = 0;
+	function getcntr(){
+		time++;
+		if(connected)
+			$("cntr").innerHTML = frames/time;
+		setTimeout(getcntr, 1000);
+	}
 //	function hexToBase64(str) {
 //		return btoa(String.fromCharCode.apply(null, str.replace(/\r|\n/g, "").replace(/([\da-fA-F]{2}) ?/g, "0x$1 ").replace(/ +$/, "").split(" ")));
 //	}
 //	function base64encode(binary) {
 //		return btoa(unescape(encodeURIComponent(binary)));
 //	}
-	function TryConnect(){
-		if(connected) return;
-		if(socket) delete socket;
-		if(imsocket) delete imsocket;
+	var wdTmout;
+	function TryImsock(){
+		console.log("Try to connect to image socket");
+		if(imsocket){
+			imsocket.onclose = function(){};
+			imsocket.close();
+			delete imsocket;
+		}
 		apprURL = get_appropriate_ws_url();
 		if (typeof MozWebSocket != "undefined") {
-			console.log("MOZ");
-			socket = new MozWebSocket(apprURL,
-						"XY-protocol");
 			imsocket = new MozWebSocket(apprURL,
 						"image-protocol");
 		} else {
-			console.log("non-MOZ");
-			socket = new WebSocket(apprURL,
-						"XY-protocol");
 			imsocket = new WebSocket(apprURL,
 						"image-protocol");
 		}
+		try {
+			imsocket.onopen = function(){
+				frames = 0; time = 0;
+				setTimeout(getcntr, 1000);
+				send();
+			}
+			imsocket.onmessage = function(msg){
+				var img = $("ws_image");
+				img.src = "data:image/jpeg;base64," + msg.data;
+				frames++;
+				clearTimeout(wdTmout);
+				wdTmout = setTimeout(TryImsock, 3000);
+				setTimeout(send, 50);
+			}
+			imsocket.onclose = function(){
+				$("connected").textContent = "Broken connection to image streamer";
+				clearTimeout(getcntr);
+				clearTimeout(wdTmout);
+				wdTmout = setTimeout(TryImsock, 1000);
+			}
+		} catch(exception) {
+			alert('Error' + exception);
+		}
+		clearTimeout(wdTmout);
+		wdTmout = setTimeout(TryImsock, 3000);
+	}
+	function TryConnect(){
+		if(connected) return;
+		if(socket) delete socket;
+		apprURL = get_appropriate_ws_url();
+		if (typeof MozWebSocket != "undefined") {
+			socket = new MozWebSocket(apprURL,
+						"XY-protocol");
+		} else {
+			socket = new WebSocket(apprURL,
+						"XY-protocol");
+		}
+		TryImsock();
 		if(!socket || !imsocket){
 			alert("Error: can't create websocket!\nMake sure that your browser supports websockets");
 			return;
-		}
-		function send(){
-			imsocket.send("get");
 		}
 		try {
 			socket.onopen = function(){
@@ -98,11 +108,10 @@ function getcntr(){
 				$("connected").textContent = "Connection opened";
 				connected = 1;
 				socket.send("G"); // get speed
-				console.log("send G");
-				setTimeout(getcntr, 1000);
 			}
-			socket.onmessage = function got_packet(msg){
+			socket.onmessage = function(msg){
 				var answ =  msg.data
+				//console.log("socket get: " + answ);
 				if(answ.substring(0,7) == "curspd="){ // server sent current motors' speed
 					globSpeed = Number(answ.substring(7));
 					$("speed").value = globSpeed;
@@ -110,28 +119,12 @@ function getcntr(){
 				}else
 					$("answer").textContent = answ;
 			}
-			imsocket.onmessage = function got_packet(msg){
-				//var bytes = new Uint8Array(msg.data);
-			//	console.log("got image " + " len64: " + msg.length);
-				var img = $("ws_image");
-				img.src = "data:image/jpeg;base64," + msg.data;
-				frames++;
-				send();
-				//setTimeout(send, 100);
-			//	img.src = "data:image/jpeg;base64," + base64encode(msg.data);
-				//var image = document.createElement('img');
-				// encode binary data to base64
-				//image.src = "data:image/jpeg;base64," + window.btoa(msg.data);
-				//image.src = "data:image/jpeg;" + msg.data;
-				//document.body.appendChild(image);
-			}
 			socket.onclose = function(){
 				$("connected").style.backgroundColor = "#ff4040";
 				$("connected").textContent = "Connection closed";
 				$("answer").textContent = "";
 				connected = 0;
 				setTimeout(TryConnect, 1000);
-				clearTimeout(getcntr);
 			}
 		} catch(exception) {
 			alert('Error' + exception);
@@ -139,7 +132,7 @@ function getcntr(){
 	}
 	function init(){
 		console.log("init");
-		document.getElementById("cont").style.width = document.getElementById("tab").clientWidth;
+		$("cont").style.width = $("tab").clientWidth;
 		var Buttons = document.getElementsByTagName("button");
 		for(var i = 0; i < Buttons.length; i++){
 			//Buttons[i].addEventListener("click", btnclick);
@@ -151,6 +144,9 @@ function getcntr(){
 		$("speed").value = globSpeed;
 		$("speed").addEventListener("input", ChSpd);
 		$("speed").addEventListener("change", SetSpd);
+		//var btn = document.createElement("button");
+		//btn.onclick = Global.send;
+		//document.body.appendChild(btn);
 		//$("speed").onchange = SetSpd;
 		TryConnect();
 	}
@@ -160,12 +156,12 @@ function getcntr(){
 	function btnmouseup(){
 		if(this.pressed == 0) return; // this function calls also from "mouseout", so we must prevent stopping twice
 		this.pressed = 0;
-		console.log("Mouse up: " + this.id);
+		//console.log("Mouse up: " + this.id);
 		if(connected) socket.send("U"+this.id);
 	}
 	function btnmousedown(){
 		this.pressed = 1;
-		console.log("Mouse down: " + this.id);
+		//console.log("Mouse down: " + this.id);
 		if(connected) socket.send("D"+this.id);
 	}
 	function ChSpd(){
@@ -178,9 +174,40 @@ function getcntr(){
 		if(connected) socket.send("S"+globSpeed);
 	}
 	return{
-		init: init
+		init: init,
+		send: send
 	}
 }();
 </script>
+</head>
+<body onload="Global.init()">
+	<table class="content"><tr><td valign="top">
+	<div style="height: 1.5em;"></div>
+	<div class="container" id="cont">
+	<table class="content" id="tab">
+		<tr><td></td>
+			<td align='center'><button id='Y+'>Y+</button></td>
+		<td></td></tr>
+		<tr>
+			<td align='center'><button id='X-'>X-</button></td>
+			<td><button id='0'>0</button></td>
+			<td align='center'><button id='X+'>X+</button></td>
+		</tr>
+		<tr><td></td>
+			<td align='center'><button id='Y-'>Y-</button></td>
+		<td></td></tr>
+	</table>
+	<div class="content">
+		Speed: <input type="range" min="1" max="499" step="1" id="speed">
+		<span id="curspeed">000</span>
+	</div>
+	<p></p>
+	<div id = "connected">No connection</div>
+	<div style="height: 1.5em;"><span id = "answer"></span></div>
+	</div>
+	</td><td>
+	<div id="cntr" style="height: 1.5em;"></div>
+	<div><img id="ws_image"></div></td></tr>
+	</table>
 </body>
 </html>

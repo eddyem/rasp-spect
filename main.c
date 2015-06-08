@@ -1,3 +1,29 @@
+/*
+ * main.c
+ *
+ * Copyright 2015 Edward V. Emelianov <eddy@sao.ru, edward.emelianoff@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+ * MA 02110-1301, USA.
+ */
+
+
+
+// for clearenv
+#define _BSD_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -15,6 +41,7 @@
 #include <pthread.h>
 
 #include "stepper.h"
+#include "image.h"
 
 #ifndef _U_
 	#define _U_    __attribute__((__unused__))
@@ -249,7 +276,6 @@ static int my_protocol_callback(_U_ struct libwebsocket_context *context,
 			}
 		}
 	}
-	//struct lws_tokens *tok = (struct lws_tokens *) user;
 	switch (reason) {
 		case LWS_CALLBACK_ESTABLISHED:
 			printf("New Connection\n");
@@ -289,106 +315,37 @@ static int my_protocol_callback(_U_ struct libwebsocket_context *context,
 	return 0;
 }
 
-
-static char encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
-                                'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
-                                'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
-                                'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f',
-                                'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
-                                'o', 'p', 'q', 'r', 's', 't', 'u', 'v',
-                                'w', 'x', 'y', 'z', '0', '1', '2', '3',
-                                '4', '5', '6', '7', '8', '9', '+', '/'};
-static int mod_table[] = {0, 2, 1};
-
-
-unsigned char *base64_encode(const unsigned char *data,
-                    size_t input_length,
-                    size_t *output_length) {
-	size_t i,j;
-	*output_length = 4 * ((input_length + 2) / 3);
-	unsigned char *encoded_data = malloc(*output_length);
-	if (encoded_data == NULL) return NULL;
-	for (i = 0, j = 0; i < input_length;) {
-		uint32_t octet_a = i < input_length ? (unsigned char)data[i++] : 0;
-		uint32_t octet_b = i < input_length ? (unsigned char)data[i++] : 0;
-		uint32_t octet_c = i < input_length ? (unsigned char)data[i++] : 0;
-		uint32_t triple = (octet_a << 0x10) + (octet_b << 0x08) + octet_c;
-		encoded_data[j++] = encoding_table[(triple >> 3 * 6) & 0x3F];
-		encoded_data[j++] = encoding_table[(triple >> 2 * 6) & 0x3F];
-		encoded_data[j++] = encoding_table[(triple >> 1 * 6) & 0x3F];
-		encoded_data[j++] = encoding_table[(triple >> 0 * 6) & 0x3F];
-	}
-	for (i = 0; i < (size_t)mod_table[input_length % 3]; i++)
-		encoded_data[*output_length - 1 - i] = '=';
-	return encoded_data;
-}
-
-
-
-
 static int improto_callback(_U_ struct libwebsocket_context *context,
 			_U_ struct libwebsocket *wsi,
 			enum libwebsocket_callback_reasons reason,
-				_U_ void *user, void *in, _U_ size_t len){
+				void *user, void *in, _U_ size_t len){
 	char client_name[128];
 	char client_ip[128];
 	char *msg = (char*) in;
-	void send_image(){
-		static int c = 0;
-		struct stat stat_buf;
-		unsigned char *buffer = NULL, *b64 = NULL;
-		unsigned char *p = NULL;
-		int fd;
-		size_t L, W;
-		if(c) fd = open("leaf.jpg", O_RDONLY);
-		else  fd = open("leaf1.jpg", O_RDONLY);
-		c = !c;
-		if(fd < 0){
-			lwsl_err("Can't open image file");
-			return;
-		}
-		fstat(fd, &stat_buf);
-		L = stat_buf.st_size;
-		//printf("image size (c=%d): %zd\n", c, L);
-		buffer = malloc(L);
-		if(!buffer) return;
-		if(L != (size_t)read(fd, buffer, L)){printf("err\n"); goto ret;}
-		b64 = base64_encode(buffer, L, &W);
-		L = W; free(buffer);
-		buffer = malloc(L+LWS_SEND_BUFFER_PRE_PADDING+LWS_SEND_BUFFER_POST_PADDING);
-		if(!buffer){printf("malloc\n"); free(b64); return;}
-		memcpy(buffer+LWS_SEND_BUFFER_PRE_PADDING,b64, L);
-		free(b64);
-		p = buffer + LWS_SEND_BUFFER_PRE_PADDING;
-		W = 0;
-		do{
-			p += W;
-			L -= W;
-			W = libwebsocket_write(wsi, p, L, LWS_WRITE_TEXT);
-			//printf("write: %zd (L=%zd)\n", W, L);
-		}while(W>0 && W!=L);
-		if(W<=0) printf("<0\n");
-		//W = libwebsocket_write(wsi, p, L, LWS_WRITE_BINARY);
-		if(L != W){
-			printf("err: needed: %zd, writed %zd\n", L, W);
-			//lwsl_err("Can't write image to socket");
-		}
-	ret:
-		free(buffer);
-		close(fd);
-	}
+	imbuf *buf = (imbuf*) user;
 	//struct lws_tokens *tok = (struct lws_tokens *) user;
 	switch (reason) {
 		case LWS_CALLBACK_ESTABLISHED:
 			printf("New Connection\n");
-			send_image();
+			memset(buf, 0, sizeof(imbuf));
+			prepare_image(buf);
+			//send_buffer(wsi, buf);
+			//send_bufportion(wsi);
 			libwebsocket_callback_on_writable(context, wsi);
 		break;
 		case LWS_CALLBACK_SERVER_WRITEABLE:
-			libwebsocket_callback_on_writable(context, wsi);
+			if(!buf->data){
+				//libwebsocket_close_and_free_session(context, wsi,
+				//	LWS_CLOSE_STATUS_NORMAL);
+			}else{
+				send_buffer(wsi, buf);
+				libwebsocket_callback_on_writable(context, wsi);
+			}
 		break;
 		case LWS_CALLBACK_RECEIVE:
-			send_image();
+			prepare_image(buf);
+			//send_buffer(wsi, buf);
+			//send_bufportion(wsi);
 		break;
 		case LWS_CALLBACK_FILTER_NETWORK_CONNECTION:
 			libwebsockets_get_peer_addresses(context, wsi, (int)(long)in,
@@ -401,6 +358,7 @@ static int improto_callback(_U_ struct libwebsocket_context *context,
 			dump_handshake_info(wsi);
 		break;
 		case LWS_CALLBACK_CLOSED:
+			free_imbuf(buf);
 			printf("Client disconnected\n");
 		break;
 		default:
@@ -417,8 +375,8 @@ static struct libwebsocket_protocols protocols[] = {
 	{
 		"image-protocol",
 		improto_callback,
-		0,
-		100,
+		sizeof(imbuf),
+		100000,
 		0, NULL, 0, 0
 	},
 	{
@@ -491,6 +449,8 @@ void *websock_thread(_U_ void *buf){
 int main(_U_ int argc, _U_ char **argv){
 	pthread_t w_thread, s_thread;
 	//size_t L;
+
+	//clearenv();
 
 	signal(SIGTERM, sighandler);	// kill (-15)
 	signal(SIGINT, sighandler);		// ctrl+C
