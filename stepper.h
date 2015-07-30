@@ -23,6 +23,8 @@
 #ifndef __STEPPER_H__
 #define __STEPPER_H__
 
+extern int center_reached;
+
 void steppers_relax();
 void *steppers_thread(void *buf);
 void Xmove(int dir, unsigned int Nsteps);

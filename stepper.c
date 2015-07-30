@@ -62,6 +62,8 @@
 	#define _U_  __attribute__((__unused__))
 #endif
 
+int center_reached = 0;
+
 #ifdef __arm__
 /**
  * function for different purposes that need to know time intervals
@@ -87,7 +89,7 @@ void Write(int pin, int val){
  * @param ex_stat - status (return code)
  */
 void steppers_relax(){
-	printf("Exit!\n");
+	printf("Stop Steppers\n");
 #ifdef __arm__
 	// disable motor & all other
 	Write(X_EN_PIN, 0);Write(X_DIR_PIN, 1);Write(X_CLK_PIN, 1);
@@ -141,8 +143,10 @@ void move_X(int dir){
 				case 2: // second stage -> all OK
 				default:
 					gotocenter[0] = 0;
-					if(gotocenter[1] == 0) // restore speed when all stopt
+					if(gotocenter[1] == 0){ // restore speed when all stopt
 						halfsteptime = 1. / (stepspersec * 8. * 2.);
+						center_reached = 1;
+					}
 			}
 		}
 #else // __arm__
@@ -172,12 +176,14 @@ void move_Y(int dir){
 				case 2: // second stage -> all OK
 				default:
 					gotocenter[1] = 0;
-					if(gotocenter[0] == 0)
+					if(gotocenter[0] == 0){
 						halfsteptime = 1. / (stepspersec * 8. * 2.);
+						center_reached = 1;
+					}
 			}
 		}
 #else // __arm__
-		printf("Stop X motor\n");
+		printf("Stop Y motor\n");
 #endif // __arm__
 	}else{
 #ifdef __arm__

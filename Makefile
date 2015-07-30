@@ -7,6 +7,7 @@ endif
 SRCS = main.c stepper.c image.c
 CC = gcc
 DEFINES = -DCUR_PATH=\"$(shell pwd)\"
+#DEFINES += -DEBUG
 CXX = gcc
 CFLAGS = -Wall -Werror -Wextra $(DEFINES) $(shell pkg-config --cflags libwebsockets)
 OBJS = $(SRCS:.c=.o)

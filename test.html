@@ -9,11 +9,24 @@
 </style>
 <script>
 Global = function(){
+	const framepause = 50; // minimal pause between subsequent frames
 	var socket = null;
 	var imsocket = null;
 	var connected = 0;
 	var globSpeed = 0;
+	var imType = "im";
+	var img = new Image();
+	var iterator = 1;
+	var frames = 0;
+	var T0 = gettime();
+	var wdTmout, faulttmout;
 	function $(nm){return document.getElementById(nm);}
+	function gettime(){
+		var d = new Date();
+		var T = d.getTime();
+		delete d;
+		return T;
+	}
 	function get_appropriate_ws_url(){
 		var pcol;
 		var u = document.URL;
@@ -31,59 +44,66 @@ Global = function(){
 	function send(){
 		imsocket.send("get");
 	}
-	var frames = 0, time = 0;
-	function getcntr(){
-		time++;
-		if(connected)
-			$("cntr").innerHTML = frames/time;
-		setTimeout(getcntr, 1000);
-	}
-//	function hexToBase64(str) {
-//		return btoa(String.fromCharCode.apply(null, str.replace(/\r|\n/g, "").replace(/([\da-fA-F]{2}) ?/g, "0x$1 ").replace(/ +$/, "").split(" ")));
-//	}
-//	function base64encode(binary) {
-//		return btoa(unescape(encodeURIComponent(binary)));
-//	}
-	var wdTmout;
-	function TryImsock(){
-		console.log("Try to connect to image socket");
+	function close_imsock(){
 		if(imsocket){
 			imsocket.onclose = function(){};
+			imsocket.onmessage = function(){};
 			imsocket.close();
 			delete imsocket;
+			imsocket = null;
 		}
+	}
+	function update_fps(){
+		var T1 = gettime();
+		var F = (++frames)/(T1-T0)*1000;
+		$("cntr").innerHTML = Math.round(F*10)/10;
+	}
+	function reload_stream(){
+		frames = 0;
+		T0 = gettime();
+		stream_next();
+	}
+	function stream_next(){
+		clearTimeout(faulttmout);
+		faulttmout = setTimeout(reload_stream, 1000); // try to reload if fault
+		img.src = "http://localhost:54321/" + (iterator++) + ".jpg";
+	}
+	img.onload = function(){
+		$("ws_image").src = img.src;
+		update_fps();
+		clearTimeout(wdTmout);
+		wdTmout = setTimeout(stream_next, framepause);
+	}
+	function TryImsock(){
+		clearTimeout(wdTmout);
+		console.log("Try to connect to image socket");
+		close_imsock();
 		apprURL = get_appropriate_ws_url();
 		if (typeof MozWebSocket != "undefined") {
-			imsocket = new MozWebSocket(apprURL,
-						"image-protocol");
+			imsocket = new MozWebSocket(apprURL, "image-protocol");
 		} else {
-			imsocket = new WebSocket(apprURL,
-						"image-protocol");
+			imsocket = new WebSocket(apprURL, "image-protocol");
 		}
 		try {
 			imsocket.onopen = function(){
-				frames = 0; time = 0;
-				setTimeout(getcntr, 1000);
+				frames = 0; T0 = gettime();
 				send();
 			}
 			imsocket.onmessage = function(msg){
-				var img = $("ws_image");
-				img.src = "data:image/jpeg;base64," + msg.data;
-				frames++;
 				clearTimeout(wdTmout);
+				$("ws_image").src = "data:image/jpeg;base64," + msg.data;
+				update_fps();
 				wdTmout = setTimeout(TryImsock, 3000);
-				setTimeout(send, 50);
+				setTimeout(send, framepause);
 			}
 			imsocket.onclose = function(){
 				$("connected").textContent = "Broken connection to image streamer";
-				clearTimeout(getcntr);
 				clearTimeout(wdTmout);
 				wdTmout = setTimeout(TryImsock, 1000);
 			}
 		} catch(exception) {
 			alert('Error' + exception);
 		}
-		clearTimeout(wdTmout);
 		wdTmout = setTimeout(TryImsock, 3000);
 	}
 	function TryConnect(){
@@ -91,14 +111,15 @@ Global = function(){
 		if(socket) delete socket;
 		apprURL = get_appropriate_ws_url();
 		if (typeof MozWebSocket != "undefined") {
-			socket = new MozWebSocket(apprURL,
-						"XY-protocol");
+			socket = new MozWebSocket(apprURL, "XY-protocol");
 		} else {
-			socket = new WebSocket(apprURL,
-						"XY-protocol");
+			socket = new WebSocket(apprURL, "XY-protocol");
 		}
-		TryImsock();
-		if(!socket || !imsocket){
+		if(imType == "ws")
+			TryImsock();
+		else
+			reload_stream();
+		if(!socket){
 			alert("Error: can't create websocket!\nMake sure that your browser supports websockets");
 			return;
 		}
@@ -111,18 +132,17 @@ Global = function(){
 			}
 			socket.onmessage = function(msg){
 				var answ =  msg.data
-				//console.log("socket get: " + answ);
 				if(answ.substring(0,7) == "curspd="){ // server sent current motors' speed
 					globSpeed = Number(answ.substring(7));
 					$("speed").value = globSpeed;
-					$("curspeed").textContent = globSpeed;
+					$("curspeed").innerHTML = globSpeed;
 				}else
-					$("answer").textContent = answ;
+					$("answer").innerHTML = answ;
 			}
 			socket.onclose = function(){
 				$("connected").style.backgroundColor = "#ff4040";
 				$("connected").textContent = "Connection closed";
-				$("answer").textContent = "";
+				$("answer").innerHTML = "";
 				connected = 0;
 				setTimeout(TryConnect, 1000);
 			}
@@ -130,38 +150,50 @@ Global = function(){
 			alert('Error' + exception);
 		}
 	}
+	function ch_imaging_type(){
+		var lbl;
+		clearTimeout(faulttmout);
+		clearTimeout(wdTmout);
+		if(imType == "ws"){
+			imType = "stream";
+			lbl = "stream";
+			close_imsock();
+			reload_stream();
+		}else{
+			imType = "ws";
+			lbl = "websock";
+			TryImsock();
+		}
+		console.log("ch type to " + imType);
+		$("imaging").innerHTML = "Imaging: " + lbl;
+	}
 	function init(){
 		console.log("init");
 		$("cont").style.width = $("tab").clientWidth;
-		var Buttons = document.getElementsByTagName("button");
+		//var Buttons = document.getElementsByTagName("button");
+		var Buttons = document.getElementsByClassName("MotorButton");
 		for(var i = 0; i < Buttons.length; i++){
-			//Buttons[i].addEventListener("click", btnclick);
 			Buttons[i].addEventListener("mousedown", btnmousedown);
 			Buttons[i].addEventListener("mouseup", btnmouseup);
 			Buttons[i].addEventListener("mouseout", btnmouseup);
 			Buttons[i].pressed = 0;
 		}
-		$("speed").value = globSpeed;
-		$("speed").addEventListener("input", ChSpd);
-		$("speed").addEventListener("change", SetSpd);
-		//var btn = document.createElement("button");
-		//btn.onclick = Global.send;
-		//document.body.appendChild(btn);
-		//$("speed").onchange = SetSpd;
+		var el = $("imaging");
+		el.onclick = ch_imaging_type;
+		el.innerHTML = "Imaging: " + ((imType == "ws") ? "websock" : "stream");
+		el = $("speed");
+		el.value = globSpeed;
+		el.addEventListener("input", ChSpd);
+		el.addEventListener("change", SetSpd);
 		TryConnect();
 	}
-	/*function btnclick(){
-		console.log("Click: " + this.id);
-	}*/
 	function btnmouseup(){
 		if(this.pressed == 0) return; // this function calls also from "mouseout", so we must prevent stopping twice
 		this.pressed = 0;
-		//console.log("Mouse up: " + this.id);
 		if(connected) socket.send("U"+this.id);
 	}
 	function btnmousedown(){
 		this.pressed = 1;
-		//console.log("Mouse down: " + this.id);
 		if(connected) socket.send("D"+this.id);
 	}
 	function ChSpd(){
@@ -186,15 +218,15 @@ Global = function(){
 	<div class="container" id="cont">
 	<table class="content" id="tab">
 		<tr><td></td>
-			<td align='center'><button id='Y+'>Y+</button></td>
+			<td align='center'><button class='MotorButton' id='Y+'>Y+</button></td>
 		<td></td></tr>
 		<tr>
-			<td align='center'><button id='X-'>X-</button></td>
-			<td><button id='0'>0</button></td>
-			<td align='center'><button id='X+'>X+</button></td>
+			<td align='center'><button class='MotorButton' id='X-'>X-</button></td>
+			<td><button class='MotorButton' id='0'>0</button></td>
+			<td align='center'><button class='MotorButton' id='X+'>X+</button></td>
 		</tr>
 		<tr><td></td>
-			<td align='center'><button id='Y-'>Y-</button></td>
+			<td align='center'><button class='MotorButton' id='Y-'>Y-</button></td>
 		<td></td></tr>
 	</table>
 	<div class="content">
@@ -203,7 +235,8 @@ Global = function(){
 	</div>
 	<p></p>
 	<div id = "connected">No connection</div>
-	<div style="height: 1.5em;"><span id = "answer"></span></div>
+	<div style="height: 2.5em;"><span id = "answer"></span></div>
+	<div align="center"><button id='imaging' style="width: 80%;">Imaging</button></div>
 	</div>
 	</td><td>
 	<div id="cntr" style="height: 1.5em;"></div>
