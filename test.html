@@ -156,12 +156,12 @@ Global = function(){
 		clearTimeout(wdTmout);
 		if(imType == "ws"){
 			imType = "stream";
-			lbl = "stream";
+			lbl = "websock";
 			close_imsock();
 			reload_stream();
 		}else{
 			imType = "ws";
-			lbl = "websock";
+			lbl = "stream";
 			TryImsock();
 		}
 		console.log("ch type to " + imType);
@@ -180,7 +180,7 @@ Global = function(){
 		}
 		var el = $("imaging");
 		el.onclick = ch_imaging_type;
-		el.innerHTML = "Imaging: " + ((imType == "ws") ? "websock" : "stream");
+		el.innerHTML = "Imaging: " + ((imType == "ws") ? "stream" : "websock");
 		el = $("speed");
 		el.value = globSpeed;
 		el.addEventListener("input", ChSpd);
