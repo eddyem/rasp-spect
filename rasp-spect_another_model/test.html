@@ -1,0 +1,247 @@
+<html>
+<head>
+	<meta charset=koi8-r http-equiv="Content-Language" content="ru"/>
+	<title>A test</title>
+	<style type="text/css">
+	.content { vertical-align:top; text-align:center; background:#fffff0; padding:12px; border-radius:10px; }
+	button { display: block; width: 70px; text-align: center; }
+	.container {border: solid 1px;  border-radius:10px; padding:12px; }
+</style>
+<script>
+Global = function(){
+	const framepause = 50; // minimal pause between subsequent frames
+	var socket = null;
+	var imsocket = null;
+	var connected = 0;
+	var globSpeed = 0;
+	var imType = "im";
+	var img = new Image();
+	var iterator = 1;
+	var frames = 0;
+	var T0 = gettime();
+	var wdTmout, faulttmout;
+	function $(nm){return document.getElementById(nm);}
+	function gettime(){
+		var d = new Date();
+		var T = d.getTime();
+		delete d;
+		return T;
+	}
+	function get_appropriate_ws_url(){
+		var pcol;
+		var u = document.URL;
+		if (u.substring(0, 5) == "https") {
+			pcol = "wss://";
+			u = u.substr(8);
+		} else {
+			pcol = "ws://";
+			if (u.substring(0, 4) == "http")
+				u = u.substr(7);
+		}
+		u = u.split('/');
+		return pcol + u[0] + ":9999";
+	}
+	function send(){
+		imsocket.send("get");
+	}
+	function close_imsock(){
+		if(imsocket){
+			imsocket.onclose = function(){};
+			imsocket.onmessage = function(){};
+			imsocket.close();
+			delete imsocket;
+			imsocket = null;
+		}
+	}
+	function update_fps(){
+		var T1 = gettime();
+		var F = (++frames)/(T1-T0)*1000;
+		$("cntr").innerHTML = Math.round(F*10)/10;
+	}
+	function reload_stream(){
+		frames = 0;
+		T0 = gettime();
+		stream_next();
+	}
+	function stream_next(){
+		clearTimeout(faulttmout);
+		faulttmout = setTimeout(reload_stream, 1000); // try to reload if fault
+		img.src = "http://localhost:54321/" + (iterator++) + ".jpg";
+	}
+	img.onload = function(){
+		$("ws_image").src = img.src;
+		update_fps();
+		clearTimeout(wdTmout);
+		wdTmout = setTimeout(stream_next, framepause);
+	}
+	function TryImsock(){
+		clearTimeout(wdTmout);
+		console.log("Try to connect to image socket");
+		close_imsock();
+		apprURL = get_appropriate_ws_url();
+		if (typeof MozWebSocket != "undefined") {
+			imsocket = new MozWebSocket(apprURL, "image-protocol");
+		} else {
+			imsocket = new WebSocket(apprURL, "image-protocol");
+		}
+		try {
+			imsocket.onopen = function(){
+				frames = 0; T0 = gettime();
+				send();
+			}
+			imsocket.onmessage = function(msg){
+				clearTimeout(wdTmout);
+				$("ws_image").src = "data:image/jpeg;base64," + msg.data;
+				update_fps();
+				wdTmout = setTimeout(TryImsock, 3000);
+				setTimeout(send, framepause);
+			}
+			imsocket.onclose = function(){
+				$("connected").textContent = "Broken connection to image streamer";
+				clearTimeout(wdTmout);
+				wdTmout = setTimeout(TryImsock, 1000);
+			}
+		} catch(exception) {
+			alert('Error' + exception);
+		}
+		wdTmout = setTimeout(TryImsock, 3000);
+	}
+	function TryConnect(){
+		if(connected) return;
+		if(socket) delete socket;
+		apprURL = get_appropriate_ws_url();
+		if (typeof MozWebSocket != "undefined") {
+			socket = new MozWebSocket(apprURL, "XY-protocol");
+		} else {
+			socket = new WebSocket(apprURL, "XY-protocol");
+		}
+		if(imType == "ws")
+			TryImsock();
+		else
+			reload_stream();
+		if(!socket){
+			alert("Error: can't create websocket!\nMake sure that your browser supports websockets");
+			return;
+		}
+		try {
+			socket.onopen = function(){
+				$("connected").style.backgroundColor = "#40ff40";
+				$("connected").textContent = "Connection opened";
+				connected = 1;
+				socket.send("G"); // get speed
+			}
+			socket.onmessage = function(msg){
+				var answ =  msg.data
+				//console.log("get data: __" + msg.data + "__");
+				if(answ.substring(0,7) == "curspd="){ // server sent current motors' speed
+					globSpeed = Number(answ.substring(7));
+					$("speed").value = globSpeed;
+					$("curspeed").innerHTML = globSpeed;
+				}else
+					$("answer").innerHTML = answ;
+			}
+			socket.onclose = function(){
+				$("connected").style.backgroundColor = "#ff4040";
+				$("connected").textContent = "Connection closed";
+				$("answer").innerHTML = "";
+				connected = 0;
+				setTimeout(TryConnect, 1000);
+			}
+		} catch(exception) {
+			alert('Error' + exception);
+		}
+	}
+	function ch_imaging_type(){
+		var lbl;
+		clearTimeout(faulttmout);
+		clearTimeout(wdTmout);
+		if(imType == "ws"){
+			imType = "stream";
+			lbl = "websock";
+			close_imsock();
+			reload_stream();
+		}else{
+			imType = "ws";
+			lbl = "stream";
+			TryImsock();
+		}
+		console.log("ch type to " + imType);
+		$("imaging").innerHTML = "Imaging: " + lbl;
+	}
+	function init(){
+		console.log("init");
+		$("cont").style.width = $("tab").clientWidth;
+		//var Buttons = document.getElementsByTagName("button");
+		var Buttons = document.getElementsByClassName("MotorButton");
+		for(var i = 0; i < Buttons.length; i++){
+			Buttons[i].addEventListener("mousedown", btnmousedown);
+			Buttons[i].addEventListener("mouseup", btnmouseup);
+			Buttons[i].addEventListener("mouseout", btnmouseup);
+			Buttons[i].pressed = 0;
+		}
+		var el = $("imaging");
+		el.onclick = ch_imaging_type;
+		el.innerHTML = "Imaging: " + ((imType == "ws") ? "stream" : "websock");
+		el = $("speed");
+		el.value = globSpeed;
+		el.addEventListener("input", ChSpd);
+		el.addEventListener("change", SetSpd);
+		TryConnect();
+	}
+	function btnmouseup(){
+		if(this.pressed == 0) return; // this function calls also from "mouseout", so we must prevent stopping twice
+		this.pressed = 0;
+		if(connected) socket.send("U"+this.id);
+	}
+	function btnmousedown(){
+		this.pressed = 1;
+		if(connected) socket.send("D"+this.id);
+	}
+	function ChSpd(){
+		if(globSpeed == this.value) return;
+		globSpeed = this.value;
+		$("curspeed").textContent = globSpeed;
+		$("answer").textContent = "";
+	}
+	function SetSpd(){
+		if(connected) socket.send("S"+globSpeed);
+	}
+	return{
+		init: init,
+		send: send
+	}
+}();
+</script>
+</head>
+<body onload="Global.init()">
+	<table class="content"><tr><td valign="top">
+	<div style="height: 1.5em;"></div>
+	<div class="container" id="cont">
+	<table class="content" id="tab">
+		<tr><td></td>
+			<td align='center'><button class='MotorButton' id='L1'>Lamp1</button></td>
+		<td></td></tr>
+		<tr>
+			<td align='center'><button class='MotorButton' id='X-'>X-</button></td>
+			<td><button class='MotorButton' id='0'>All OFF</button></td>
+			<td align='center'><button class='MotorButton' id='X+'>X+</button></td>
+		</tr>
+		<tr><td></td>
+			<td align='center'><button class='MotorButton' id='L2'>Lamp2</button></td>
+		<td></td></tr>
+	</table>
+	<div class="content">
+		Speed: <input type="range" min="1" max="499" step="1" id="speed">
+		<span id="curspeed">000</span>
+	</div>
+	<p></p>
+	<div id = "connected">No connection</div>
+	<div style="height: 2.5em;"><span id = "answer"></span></div>
+	<div align="center"><button id='imaging' style="width: 80%;">Imaging</button></div>
+	</div>
+	</td><td>
+	<div id="cntr" style="height: 1.5em;"></div>
+	<div><img id="ws_image"></div></td></tr>
+	</table>
+</body>
+</html>
