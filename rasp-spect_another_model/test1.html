@@ -4,7 +4,7 @@
 	<title>Try to connect</title>
 	<style type="text/css">
 	.content { vertical-align:top; text-align:center; background:#fffff0; padding:12px; border-radius:10px; }
-	button { display: block; width: 50px; text-align: center; }
+	button { width: 50px; text-align: center; }
 	.widebtn { width: 100px; }
 	.container {border: solid 1px;  border-radius:10px; padding:12px; }
 </style>
@@ -28,20 +28,51 @@ Global = function(){
 		delete d;
 		return T;
 	}
-	function get_appropriate_ws_url(){
-		var pcol;
+	function sendrequest(CGI_PATH, fn_OK){
+		var timeout_id, str;
+		var request = new XMLHttpRequest();
+		request.open("POST", CGI_PATH, true);
+		request.onreadystatechange = function(){
+			if(request.readyState == 4){
+				if(request.status == 200){
+					clearTimeout(timeout_id);
+					fn_OK(request.responseText);
+				}
+				else{
+					clearTimeout(timeout_id);
+					console.log("Error: can't connect to data server");
+				}
+			}
+		}
+		request.send(null);
+		timeout_id = setTimeout(function(){
+				request.onreadystatechange=null; request.abort();
+			}, 1500);
+		delete(request);
+	}
+	var URL = "";
+	function get_url(){
+		if(URL != "") return URL;
 		var u = document.URL;
 		if (u.substring(0, 5) == "https") {
-			pcol = "wss://";
 			u = u.substr(8);
 		} else {
-			pcol = "ws://";
 			if (u.substring(0, 4) == "http")
 				u = u.substr(7);
 		}
 		u = u.split('/');
-		console.log("app url: " + pcol + u[0] + ":9999");
-		return pcol + u[0] + ":9999";
+		URL = u[0];
+		delete(u);
+		return URL;
+	}
+	function get_appropriate_ws_url(){
+		var u = document.URL, pcol;
+		if (u.substring(0, 5) == "https") {
+			pcol = "wss://";
+		} else {
+			pcol = "ws://";
+		}
+		return pcol + get_url() + ":9999";
 	}
 	function send(){
 		imsocket.send("get");
@@ -65,11 +96,21 @@ Global = function(){
 		T0 = gettime();
 		stream_next();
 	}
+	var nfrini = 0;
+	function init_nframes(reqtext){
+		nfrini = 1;
+		if(reqtext.substring(0,4) == "sum="){
+			$("nframes").value = reqtext.substring(4);
+		}
+	}
 	function stream_next(){
+		if(!nfrini){
+			sendrequest("http://" + get_url()  + ":54321/" + "sum=x", init_nframes);
+		}
 		clearTimeout(faulttmout);
 		faulttmout = setTimeout(reload_stream, 5000); // try to reload if fault
 		clearTimeout(wdTmout);
-		img.src = "http://192.168.99.11:54321/" + (iterator++) + ".jpg";
+		img.src = "http://" + get_url() + ":54321/" + (iterator++) + ".jpg";
 	}
 	img.onload = function(){
 		$("ws_image").src = img.src;
@@ -108,11 +149,13 @@ Global = function(){
 		}
 		wdTmout = setTimeout(TryImsock, 5000);
 	}
+	var msg_timeout;
 	function getvals(){
+		msg_timeout = setTimeout(socket_closed, 3000); // 3s timeout for answer
+		setTimeout(getvals, 500);
 		socket.send("G");
 		socket.send("E");
 		socket.send("L");
-		socket.send("Dgetnet");
 	}
 	function change_net(){
 		socket.send("Dchnet=ip="+$("IP").value+" mask="+$("mask").value+" brd="+$("brd").value+" gate="+$("gate").value);
@@ -136,6 +179,18 @@ Global = function(){
 		$("mask").value = mask;
 		$("brd").value = brd;
 		$("gate").value = gate;
+	}
+	function socket_closed(){
+		if(socket){
+			socket.close();
+			delete socket;
+		}
+		$("connected").style.backgroundColor = "#ff4040";
+		$("connected").textContent = "Connection closed";
+		$("answer").innerHTML = "";
+		document.title = "Disconnected";
+		connected = 0;
+		setTimeout(TryConnect, 500);
 	}
 	function TryConnect(){
 		if(connected) return;
@@ -161,9 +216,11 @@ Global = function(){
 				$("connected").style.backgroundColor = "#40ff40";
 				$("connected").textContent = "Connection opened";
 				connected = 1;
-				getvals();
+				socket.send("Dgetnet");
+				setTimeout(getvals, 500);
 			}
 			socket.onmessage = function(msg){
+				clearTimeout(msg_timeout);
 				var answ =  msg.data;
 				//console.log("get data: __" + msg.data + "__");
 				if(answ.substring(0,7) == "curspd="){ // server sent current motors' speed
@@ -179,9 +236,7 @@ Global = function(){
 						$("X-").style = "background-color: buttonface;";
 						$("X+").style = "background-color: buttonface;";
 					}
-					//$("esw").innerHTML = answ;
 				}else if(answ.substring(0,6) == "lamps="){
-					//$("lamp").innerHTML = answ;
 					var l = Number(answ.substring(6));
 					if(l){
 						if(l == 1 || l == 3) $("L1").style = "background-color: green;";
@@ -190,20 +245,12 @@ Global = function(){
 						$("L1").style = "background-color: buttonface;";
 						$("L2").style = "background-color: buttonface;";
 					}
-					setTimeout(getvals, 300);
 				}else if(answ.substring(0,4) == "net="){
 					parseNET(answ.substring(4));
 				}else
 					$("answer").innerHTML = answ;
 			}
-			socket.onclose = function(){
-				$("connected").style.backgroundColor = "#ff4040";
-				$("connected").textContent = "Connection closed";
-				$("answer").innerHTML = "";
-				document.title = "Disconnected";
-				connected = 0;
-				setTimeout(TryConnect, 500);
-			}
+			socket.onclose = socket_closed;
 		} catch(exception) {
 			alert('Error' + exception);
 		}
@@ -226,7 +273,12 @@ Global = function(){
 		$("imaging").innerHTML = "Imaging: " + lbl;
 	}
 	function showhide(){
+		if(!connected){
+			$("addpar").style.display = "none";
+			return;
+		}
 		if($("addpar").style.display == "none"){
+			socket.send("Dgetnet");
 			$("addpar").style.display = "block";
 		}else{
 			$("addpar").style.display = "none";
@@ -273,9 +325,13 @@ Global = function(){
 	function SetSpd(){
 		if(connected) socket.send("S"+globSpeed);
 	}
+	function refreshnsum(){
+		sendrequest("http://" + get_url()  + ":54321/" + "sum=" + $("nframes").value, init_nframes);
+	}
 	return{
 		init: init,
-		send: send
+		send: send,
+		refreshnsum: refreshnsum
 	}
 }();
 </script>
@@ -302,10 +358,10 @@ Global = function(){
 		<span id="curspeed">000</span>
 	</div>
 	<p></p>
+	<div>Sum <input type="text" id="nframes" size="3"> frames
+		<button id="setframesum" onclick="Global.refreshnsum();">Set</button></div>
 	<div id = "connected">No connection</div>
 	<div style="height: 2.5em;"><span id = "answer"></span></div>
-	<div style="display: none;"><span id = "lamp"></span></div>
-	<div style="display: none;"><span id = "esw"></span></div>
 	<div id="showhide">Additional parameters</div><div style="display: none;" id="addpar">
 	<div align="center"><button id='imaging' style="width: 80%;">Imaging</button></div>
 	<table><tr><td>IP:</td><td><input type="text" id="IP" size=14></td></tr>

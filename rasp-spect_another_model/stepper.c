@@ -213,12 +213,6 @@ void *steppers_thread(_U_ void *buf){
 			//DBG("cur-last=%g, half: %g", dtime() - laststeptime, halfsteptime);
 			if((curtime = dtime()) - laststeptime > halfsteptime){
 				//DBG("1/8step");
-					// check end-switches, if motor reach esw, stop it
-				if((digitalRead(ESW1_PIN) == 0  && glob_dir == -1) || 
-					(digitalRead(ESW2_PIN) == 0 && glob_dir == 1)){
-						move_motor(0);
-						DBG("Reach end-switch %d", get_endsw());
-				}
 				Write(MOTOR_PIN1, steps_half[steppart][0]);
 				Write(MOTOR_PIN2, steps_half[steppart][1]);
 				Write(MOTOR_PIN3, steps_half[steppart][2]);
@@ -246,6 +240,12 @@ void *steppers_thread(_U_ void *buf){
 				}
 				if(fullstep){ // full step processed
 					++steps;
+					// check end-switches, if motor reach esw, stop it
+					if((digitalRead(ESW1_PIN) == 0  && glob_dir == -1) || 
+							(digitalRead(ESW2_PIN) == 0 && glob_dir == 1)){
+						move_motor(0);
+						DBG("Reach end-switch %d", get_endsw());
+					}
 					//DBG("step");
 					if(stopat && stopat == steps){ // finite move for stopat steps
 						move_motor(0);
