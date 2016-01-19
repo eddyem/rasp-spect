@@ -34,6 +34,7 @@
 
 #include "stepper.h"
 #include "dbg.h"
+#include "que.h"
 
 #ifdef __arm__
 /**
@@ -59,18 +60,22 @@ void Write(int pin, int val){
 #ifdef __arm__
 // arrays for full & half stepping (signal level for corresponding pin)
 // {MOTOR_PIN1, MOTOR_PIN2, MOTOR_PIN3, MOTOR_PIN4}
-/*const int steps_full[][4] = {
-	{0, 1, 0, 1},
-	{0, 1, 1, 0},
-	{1, 0, 1, 0},
-	{1, 0, 0, 1}
-};*/
+/*
 const int steps_full[][4] = {
-	{0, 1, 1, 0},
-	{0, 1, 0, 1},
 	{1, 0, 0, 1},
-	{1, 0, 1, 0}
+	{1, 0, 1, 0},
+	{0, 1, 1, 0},
+	{0, 1, 0, 1}
 };
+*/
+
+const int steps_full[][4] = {
+	{1, 0, 0, 1},
+	{1, 0, 1, 0},
+	{0, 1, 1, 0},
+	{0, 1, 0, 1}
+};
+
 /*
 const int steps_half[][4] = {
 	{0, 1, 0, 1},
@@ -83,16 +88,30 @@ const int steps_half[][4] = {
 	{0, 0, 0, 1}
 };
 */
+
+const int steps_half[][4] = {
+	{1, 0, 0, 1},
+	{1, 0, 1, 1},
+	{1, 0, 1, 0},
+	{1, 1, 1, 0},
+	{0, 1, 1, 0},
+	{0, 1, 1, 1},
+	{0, 1, 0, 1},
+	{1, 1, 0, 1}
+};
+
+/*
 const int steps_half[][4] = {
 	{0, 1, 1, 0},
-	{0, 1, 0, 0},
+	{0, 1, 1, 1},
 	{0, 1, 0, 1},
-	{0, 0, 0, 1},
+	{1, 1, 0, 1},
 	{1, 0, 0, 1},
-	{1, 0, 0, 0},
+	{1, 0, 1, 1},
 	{1, 0, 1, 0},
-	{0, 0, 1, 0}
+	{1, 1, 1, 0}
 };
+*/
 #endif // __arm__
 
 void setup_pins(){
@@ -116,7 +135,7 @@ void setup_pins(){
 }
 
 #ifdef __arm__
-volatile int glob_dir = 0, stepspersec = 50;
+volatile int glob_dir = 0, stepspersec = 150;
 volatile unsigned int steps = 0, stopat = 0;
 volatile double halfsteptime;
 #endif // __arm__
@@ -137,7 +156,7 @@ void stop_motor(){
 #endif // __arm__
 }
 
-
+int steppart = 0;
 /**
  * Rotate motors X,Y to direction dir (CW > 0)
  * Stop motor if dir == 0
@@ -148,12 +167,23 @@ void move_motor(int dir){
 		glob_dir = 0;
 		stopat = 0;
 		stop_motor();
+	//	exit(0);
 #else // __arm__
 		printf("Stop motor\n");
 #endif // __arm__
 	}else{
 #ifdef __arm__
+	if((digitalRead(ESW1_PIN) == 0  && dir == -1) || 
+		(digitalRead(ESW2_PIN) == 0 && dir == 1)){
+		DBG("already on ESW");
+	//	exit(0);
+		glob_dir = 0;
+	}else{
 		glob_dir = dir;
+		if(dir > 0) steppart = 0;
+		else steppart = 7;
+		DBG("move to %d", dir);
+	}
 #else // __arm__
 		printf("Move X to %s\n", (dir > 0) ? "++" : "--");
 #endif // __arm__
@@ -169,7 +199,6 @@ void Xmove(int dir, unsigned int Nsteps){
 	steps = 0;
 	stopat = Nsteps;
 	move_motor(dir);
-	DBG("move to %d", dir);
 #else
 	printf("Move x axis to %u in dir %d\n", Nsteps, dir);
 #endif // __arm__
@@ -180,6 +209,8 @@ void set_motors_speed(int steps_per_sec){
 #ifdef __arm__
 		stepspersec = steps_per_sec;
 		halfsteptime = 1. / (stepspersec * 8.);
+		GLOB_MESG("curspd=%d", get_motors_speed());
+
 #else // __arm__
 		printf("Set speed to %d\n", steps_per_sec);
 #endif // __arm__
@@ -203,16 +234,17 @@ void *steppers_thread(_U_ void *buf){
 	DBG("steppers_thr");
 #ifdef __arm__
 	double laststeptime, curtime;
-	halfsteptime = 1. / (stepspersec * 8.); // 300 steps & 8 usteps per second
+	halfsteptime = 1. / (stepspersec * 8.);
 	DBG("halfsteptime: %g", halfsteptime);
 	laststeptime = dtime();
-	int steppart = 0;
+	int eswsteps = 0;
 	while(!force_exit){
 		usleep(10); // garanteed pause == 10us
 		if(glob_dir){
 			//DBG("cur-last=%g, half: %g", dtime() - laststeptime, halfsteptime);
 			if((curtime = dtime()) - laststeptime > halfsteptime){
 				//DBG("1/8step");
+				
 				Write(MOTOR_PIN1, steps_half[steppart][0]);
 				Write(MOTOR_PIN2, steps_half[steppart][1]);
 				Write(MOTOR_PIN3, steps_half[steppart][2]);
@@ -224,6 +256,7 @@ void *steppers_thread(_U_ void *buf){
 				Write(MOTOR_PIN4, steps_full[steppart][3]);
 				*/
 				//DBG("steppart: %d", steppart);
+				laststeptime = curtime;
 				int fullstep = 0;
 				if(glob_dir > 0){
 					if(++steppart == 8){
@@ -235,23 +268,33 @@ void *steppers_thread(_U_ void *buf){
 					if(--steppart < 0){
 						steppart = 7;
 						//steppart = 3;
-					}else if(steppart == 0)
 						fullstep = 1;
+					}
 				}
 				if(fullstep){ // full step processed
 					++steps;
+					if(steps % 10 == 0) 
+						GLOB_MESG("nsteps=%d", steps);
 					// check end-switches, if motor reach esw, stop it
 					if((digitalRead(ESW1_PIN) == 0  && glob_dir == -1) || 
 							(digitalRead(ESW2_PIN) == 0 && glob_dir == 1)){
-						move_motor(0);
-						DBG("Reach end-switch %d", get_endsw());
-					}
+						if(++eswsteps == 5){
+							int Nsw = get_endsw();
+							if(Nsw){
+								DBG("Reach end-switch %d @%u steps", Nsw, steps);
+								GLOB_MESG("esw=%d", Nsw);
+								move_motor(0);
+								GLOB_MESG("end-switch %d reached at %u steps", Nsw, steps);
+							}else eswsteps = 0;
+						}
+					}else eswsteps = 0;
 					//DBG("step");
 					if(stopat && stopat == steps){ // finite move for stopat steps
+						DBG("Reach position of %d steps", steps);
+						GLOB_MESG("position %d steps reached", steps);
 						move_motor(0);
 					}
 				}
-				laststeptime = curtime;
 			}
 		}else{
 			steppart = 0;

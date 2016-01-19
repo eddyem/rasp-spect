@@ -1,7 +1,7 @@
 /*
- * image.h
+ * que.h
  *
- * Copyright 2015 Edward V. Emelianov <eddy@sao.ru, edward.emelianoff@gmail.com>
+ * Copyright 2016 Edward V. Emelianov <eddy@sao.ru, edward.emelianoff@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,24 +18,12 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301, USA.
  */
-
 #pragma once
-#ifndef __IMAGE_H__
-#define __IMAGE_H__
+#ifndef __QUE_H__
+#define __QUE_H__
 
-#include <libwebsockets.h>
-
-#define IMAGE_HOST   "localhost"
-#define IMAGE_PORT   "54321"
-#define IMAGE_FORMAT "jpg"
-
-typedef struct{
-	unsigned char *data;
-	size_t len;
-} imbuf;
-
-void prepare_image(imbuf *buf);
-void free_imbuf(imbuf *buf);
-void send_buffer(struct libwebsocket *wsi, imbuf *buf);
-
-#endif // __IMAGE_H__
+#define MESSAGE_LEN        (512)
+extern char que[];
+void glob_que(char *buf);
+#define GLOB_MESG(...)  do{snprintf(que, 512, __VA_ARGS__); glob_que(que);}while(0)
+#endif // __QUE_H__

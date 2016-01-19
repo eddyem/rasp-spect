@@ -2,16 +2,16 @@ PROGRAM = websocktest
 LDFLAGS = $(shell pkg-config --libs libwebsockets) -lpthread
 #ifneq (,$(findstring "arm",$(shell uname -m)))
 ifneq (,$(filter arm%, $(shell uname -m)))
-LDFLAGS += -lwiringPi -lwiringPiDev
+LDFLAGS += -lwiringPi 
 endif
-SRCS = main.c stepper.c image.c
+SRCS = main.c stepper.c 
 CC = gcc
-DEFINES = -DCUR_PATH=\"$(shell pwd)\"
-#DEFINES += -DEBUG
+DEFINES = -DCUR_PATH=\"$(shell pwd)\" 
+DEFINES += -DEBUG
 CXX = gcc
 CFLAGS = -Wall -Werror -Wextra $(DEFINES) $(shell pkg-config --cflags libwebsockets)
 OBJS = $(SRCS:.c=.o)
-all : $(PROGRAM) clean
+all : $(PROGRAM) 
 $(PROGRAM) : $(OBJS)
 	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) -o $(PROGRAM)
 

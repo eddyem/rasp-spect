@@ -5,17 +5,15 @@
 	<style type="text/css">
 	.content { vertical-align:top; text-align:center; background:#fffff0; padding:12px; border-radius:10px; }
 	button { width: 50px; text-align: center; }
-	.widebtn { width: 100px; }
+	.widebtn { width: 100%; }
 	.container {border: solid 1px;  border-radius:10px; padding:12px; }
 </style>
 <script>
 Global = function(){
-	const framepause = 1000; // minimal pause between subsequent frames
+	const framepause = 10; // minimal pause between subsequent frames
 	var socket = null;
-	var imsocket = null;
 	var connected = 0;
 	var globSpeed = 0;
-	var imType = "im";
 	var img = new Image();
 	var iterator = 1;
 	var frames = 0;
@@ -74,18 +72,6 @@ Global = function(){
 		}
 		return pcol + get_url() + ":9999";
 	}
-	function send(){
-		imsocket.send("get");
-	}
-	function close_imsock(){
-		if(imsocket){
-			imsocket.onclose = function(){};
-			imsocket.onmessage = function(){};
-			imsocket.close();
-			delete imsocket;
-			imsocket = null;
-		}
-	}
 	function update_fps(){
 		var T1 = gettime();
 		var F = (++frames)/(T1-T0)*1000;
@@ -117,42 +103,11 @@ Global = function(){
 		update_fps();
 		wdTmout = setTimeout(stream_next, framepause);
 	}
-	function TryImsock(){
-		clearTimeout(wdTmout);
-		console.log("Try to connect to image socket");
-		close_imsock();
-		apprURL = get_appropriate_ws_url();
-		if (typeof MozWebSocket != "undefined") {
-			imsocket = new MozWebSocket(apprURL, "image-protocol");
-		} else {
-			imsocket = new WebSocket(apprURL, "image-protocol");
-		}
-		try {
-			imsocket.onopen = function(){
-				frames = 0; T0 = gettime();
-				send();
-			}
-			imsocket.onmessage = function(msg){
-				clearTimeout(wdTmout);
-				$("ws_image").src = "data:image/jpeg;base64," + msg.data;
-				update_fps();
-				wdTmout = setTimeout(TryImsock, 5000);
-				setTimeout(send, framepause);
-			}
-			imsocket.onclose = function(){
-				$("connected").textContent = "Broken connection to image streamer";
-				clearTimeout(wdTmout);
-				wdTmout = setTimeout(TryImsock, 1000);
-			}
-		} catch(exception) {
-			alert('Error' + exception);
-		}
-		wdTmout = setTimeout(TryImsock, 5000);
-	}
-	var msg_timeout;
+	var msg_timeout, getvals_tmout;
 	function getvals(){
-		msg_timeout = setTimeout(socket_closed, 3000); // 3s timeout for answer
-		setTimeout(getvals, 500);
+		msg_timeout = setTimeout(socket_closed, 5000); // 5s timeout for answer
+		clearTimeout(getvals_tmout);
+		getvals_tmout = setTimeout(getvals, 2000);
 		socket.send("G");
 		socket.send("E");
 		socket.send("L");
@@ -162,6 +117,9 @@ Global = function(){
 	}
 	function reboot(){
 		socket.send("Dreboot");
+	}
+	function poweroff(){
+		socket.send("Dpoweroff");
 	}
 	function parseNET(val){
 		var IP = "", mask = "", brd = "", gate = "";
@@ -181,6 +139,8 @@ Global = function(){
 		$("gate").value = gate;
 	}
 	function socket_closed(){
+		clearTimeout(getvals_tmout);
+		clearTimeout(msg_timeout);
 		if(socket){
 			socket.close();
 			delete socket;
@@ -190,6 +150,7 @@ Global = function(){
 		$("answer").innerHTML = "";
 		document.title = "Disconnected";
 		connected = 0;
+		showhide();
 		setTimeout(TryConnect, 500);
 	}
 	function TryConnect(){
@@ -201,10 +162,7 @@ Global = function(){
 		} else {
 			socket = new WebSocket(apprURL, "XY-protocol");
 		}
-		if(imType == "ws")
-			TryImsock();
-		else
-			reload_stream();
+		reload_stream();
 		if(!socket){
 			alert("Error: can't create websocket!\nMake sure that your browser supports websockets");
 			return;
@@ -217,19 +175,25 @@ Global = function(){
 				$("connected").textContent = "Connection opened";
 				connected = 1;
 				socket.send("Dgetnet");
-				setTimeout(getvals, 500);
+				getvals_tmout = setTimeout(getvals, 500);
 			}
 			socket.onmessage = function(msg){
 				clearTimeout(msg_timeout);
 				var answ =  msg.data;
-				//console.log("get data: __" + msg.data + "__");
-				if(answ.substring(0,7) == "curspd="){ // server sent current motors' speed
+				//console.log("get data: __" + answ + "__");
+				if(answ.substring(0,7) == "nsteps="){
+					var nsteps = Number(answ.substring(7));
+					$("curpos").value = nsteps;
+					$("cursteps").innerHTML = Math.ceil(nsteps / 44) + "%";
+				}else if(answ.substring(0,7) == "curspd="){ // server sent current motors' speed
 					globSpeed = Number(answ.substring(7));
 					$("speed").value = globSpeed;
 					$("curspeed").innerHTML = globSpeed;
 				}else if(answ.substring(0,4) == "esw="){
 					var ESW = Number(answ.substring(4));
 					if(ESW){
+						$("curpos").value = 4400;
+						$("cursteps").innerHTML = "100%";
 						if(ESW == 1) $("X-").style = "background-color: red;";
 						else $("X+").style = "background-color: red;";
 					}else{
@@ -254,23 +218,6 @@ Global = function(){
 		} catch(exception) {
 			alert('Error' + exception);
 		}
-	}
-	function ch_imaging_type(){
-		var lbl;
-		clearTimeout(faulttmout);
-		clearTimeout(wdTmout);
-		if(imType == "ws"){
-			imType = "stream";
-			lbl = "websock";
-			close_imsock();
-			reload_stream();
-		}else{
-			imType = "ws";
-			lbl = "stream";
-			TryImsock();
-		}
-		console.log("ch type to " + imType);
-		$("imaging").innerHTML = "Imaging: " + lbl;
 	}
 	function showhide(){
 		if(!connected){
@@ -298,10 +245,8 @@ Global = function(){
 		$("chnet").addEventListener("mousedown", change_net);
 		$("showhide").addEventListener("mousedown", showhide);
 		$("reboot").addEventListener("mousedown", reboot);
-		var el = $("imaging");
-		el.onclick = ch_imaging_type;
-		el.innerHTML = "Imaging: " + ((imType == "ws") ? "stream" : "websock");
-		el = $("speed");
+		$("poweroff").addEventListener("mousedown", poweroff);
+		var el = $("speed");
 		el.value = globSpeed;
 		el.addEventListener("input", ChSpd);
 		el.addEventListener("change", SetSpd);
@@ -330,7 +275,6 @@ Global = function(){
 	}
 	return{
 		init: init,
-		send: send,
 		refreshnsum: refreshnsum
 	}
 }();
@@ -353,6 +297,7 @@ Global = function(){
 			<td align='center'><button class='MotorButton widebtn' id='L2'>Flat spectra</button></td>
 		<td></td></tr>
 	</table>
+	<div class="content"><progress value="0" max="4400" id="curpos">222</progress>&nbsp;(<span id="cursteps">0</span>)</div>
 	<div class="content">
 		Speed: <input type="range" min="1" max="200" step="1" id="speed">
 		<span id="curspeed">000</span>
@@ -360,20 +305,28 @@ Global = function(){
 	<p></p>
 	<div>Sum <input type="text" id="nframes" size="3"> frames
 		<button id="setframesum" onclick="Global.refreshnsum();">Set</button></div>
+	<div style="height: 5pt"></div>
 	<div id = "connected">No connection</div>
 	<div style="height: 2.5em;"><span id = "answer"></span></div>
-	<div id="showhide">Additional parameters</div><div style="display: none;" id="addpar">
-	<div align="center"><button id='imaging' style="width: 80%;">Imaging</button></div>
-	<table><tr><td>IP:</td><td><input type="text" id="IP" size=14></td></tr>
-		<tr><td>mask:</td><td><input type="text" id="mask" size=14></td></tr>
-		<tr><td>broad:</td><td><input type="text" id="brd" size=14></td></tr>
-		<tr><td>gate:</td><td><input type="text" id="gate" size=14></td></tr>
-	</table>
-	<div align="center"><button style="width:80%;" id='chnet'>Change</button></div>
-	<div style="height: 2em"></div>
-	<div align="center"><button style="width:80%; background-color: red;" id='reboot'>Reboot</button></div>
+	<button class="widebtn" id="showhide">Additional parameters</button>
+	<div style="display: none;" id="addpar">
+	<div style="height: 5pt"></div>
+	<div class="container" style=" background:#a0a0ff;">
+		<table><tr><td>IP:</td><td><input type="text" id="IP" size=14></td></tr>
+			<tr><td>mask:</td><td><input type="text" id="mask" size=14></td></tr>
+			<tr><td>broad:</td><td><input type="text" id="brd" size=14></td></tr>
+			<tr><td>gate:</td><td><input type="text" id="gate" size=14></td></tr>
+		</table>
+		<div align="center"><button style="width:80%;" id='chnet'>Change</button></div>
 	</div>
-	</td><td>
+	<div style="height: 2em"></div>
+	<div class="container" style=" background:#ffa0a0;">
+		<div align="center"><button style="width:80%; background-color: red;" id='reboot'>Reboot</button></div>
+		<div style="height: 5pt"></div>
+		<div align="center"><button style="width:80%; background-color: red;" id='poweroff'>Power off</button></div>
+	</div>
+	</div>
+	</td><td valign="top">
 	<div id="cntr" style="height: 1.5em;"></div>
 	<div><img id="ws_image"></div></td></tr>
 	</table>

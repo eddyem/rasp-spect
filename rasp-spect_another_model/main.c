@@ -46,14 +46,13 @@
 #include <sys/reboot.h>
 
 #include "stepper.h"
-#include "image.h"
 #include "dbg.h"
+#include "que.h"
 
 #define MESSAGE_QUEUE_SIZE 3
-#define MESSAGE_LEN        512
 
 #define NETCONFIG  "/etc/conf.d/net"
-#define CMDBUFLEN  (512)
+#define CMDBUFLEN  (MESSAGE_LEN)
 // individual data per session
 typedef struct{
 	int num;
@@ -71,6 +70,8 @@ pthread_mutex_t command_mutex, ip_mutex;
 char cmd_buf[CMDBUFLEN] = {0};
 volatile int data_in_buf = 0; // signals that there's some data in cmd_buf to send to motors
 
+char que[CMDBUFLEN];
+
 void put_message_to_queue(char *msg, per_session_data *dat){
 	int L = strlen(msg);
 	if(dat->num >= MESSAGE_QUEUE_SIZE) return;
@@ -79,6 +80,10 @@ void put_message_to_queue(char *msg, per_session_data *dat){
 	strncpy(dat->message[dat->idxwr], msg, L);
 	dat->message[dat->idxwr][L] = 0;
 	if((++(dat->idxwr)) >= MESSAGE_QUEUE_SIZE) dat->idxwr = 0;
+}
+
+void glob_que(char *buf){
+	put_message_to_queue(buf, &global_queue);
 }
 
 char *get_message_from_queue(per_session_data *dat){
@@ -159,7 +164,9 @@ int change_net(char *cmd){
 	}
 	close(f);
 	printf("%s\n", buf);
-	if(system("service net.eth0 restart") < 0) return 9;
+	sync();
+	sleep(2);
+	reboot(RB_AUTOBOOT);
 	return 0;
 }
 volatile int force_exit = 0;
@@ -177,8 +184,6 @@ volatile int force_exit = 0;
  * G - get steppers speed
  */
 void process_buf(char *command){
-	char que[512];
-	#define GLOB_MESG(...)  do{snprintf(que, 512, __VA_ARGS__); put_message_to_queue(que, &global_queue);}while(0)
 	int dir = 0, nlamp = 0;
 	long X;
 	void (*moveFN)(int, unsigned int) = NULL;
@@ -231,12 +236,6 @@ void process_buf(char *command){
 				GLOB_MESG("lamp %d switched, state: %d", nlamp, getlamp());
 			}else if(strcmp(command, "Dgetnet") == 0){ // get network configuration
 				GLOB_MESG("net=%s", getnet());
-			}else if(strncmp(command, "Dchnet", 6) == 0){
-				if(change_net(command+7)) GLOB_MESG("Error! Can't change network settings");
-			}else if(strcmp(command, "Dreboot") == 0){
-				GLOB_MESG("REBOOT!");
-				DBG("\n\nREBOOT\n\n");
-				reboot(RB_AUTOBOOT);
 			}
 		break;
 	/*	case 'U': // button released - stop motor
@@ -267,9 +266,23 @@ void websig(char *command, per_session_data *dat){
 		MESG("Undefined command");
 		return;
 	}
-	if(strcmp(command, "Dgetnet") == 0) goto ret;
-	if(strncmp(command, "Dchnet", 6) == 0) goto ret;
-	if(strcmp(command, "Dreboot") == 0) goto ret;
+	if(command[0] == 'D' && L > 5){
+		if(strcmp(command, "Dgetnet") == 0) goto ret;
+		else if(strncmp(command, "Dchnet", 6) == 0){
+			if(change_net(command+7)) MESG("Error! Can't change network settings");
+		}
+		else if(strcmp(command, "Dreboot") == 0){
+			MESG("REBOOT!");
+			DBG("\n\nREBOOT\n\n");
+			sync();
+			reboot(RB_AUTOBOOT);
+		}else if(strcmp(command, "Dpoweroff") == 0){
+			MESG("POWEROFF!");
+			DBG("\n\nPOWEROFF\n\n");
+			sync();
+			reboot(RB_POWER_OFF);
+		}
+	}
 	if(L == 1){
 		MESG("Broken command!");
 		return;
@@ -461,13 +474,16 @@ static int my_protocol_callback(struct libwebsocket_context *context,
 				parse_queue_msg(dat);
 				if(!dat->already_connected)
 					parse_queue_msg(&global_queue);
+			}else{
+				usleep(500);
 			}
 			libwebsocket_callback_on_writable(context, wsi);
+			return 0;
 		break;
 		case LWS_CALLBACK_RECEIVE:
 			if(!dat->already_connected)
 				websig(msg, dat);
-			//else DBG("got message: %s\n", msg);
+			//DBG("got message: %s\n", msg);
 			//else return -1;
 		break;
 		case LWS_CALLBACK_FILTER_NETWORK_CONNECTION:
@@ -496,56 +512,6 @@ static int my_protocol_callback(struct libwebsocket_context *context,
 	return 0;
 }
 
-static int improto_callback(_U_ struct libwebsocket_context *context,
-			_U_ struct libwebsocket *wsi,
-			enum libwebsocket_callback_reasons reason,
-				void *user, void *in, _U_ size_t len){
-	char client_name[128];
-	char client_ip[128];
-	char *msg = (char*) in;
-	imbuf *buf = (imbuf*) user;
-	//struct lws_tokens *tok = (struct lws_tokens *) user;
-	switch (reason) {
-		case LWS_CALLBACK_ESTABLISHED:
-			printf("New Connection\n");
-			memset(buf, 0, sizeof(imbuf));
-			prepare_image(buf);
-			libwebsocket_callback_on_writable(context, wsi);
-		break;
-		case LWS_CALLBACK_SERVER_WRITEABLE:
-			if(buf->data){
-				send_buffer(wsi, buf);
-				libwebsocket_callback_on_writable(context, wsi);
-			}
-		break;
-		case LWS_CALLBACK_RECEIVE:
-			prepare_image(buf);
-		break;
-		case LWS_CALLBACK_FILTER_NETWORK_CONNECTION:
-			libwebsockets_get_peer_addresses(context, wsi, (int)(long)in,
-				client_name, 127, client_ip, 127);
-			printf("Received network connection from %s (%s)\n",
-							client_name, client_ip);
-		break;
-		case LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION:
-			printf("Client asks for %s\n", msg);
-			dump_handshake_info(wsi);
-		break;
-		case LWS_CALLBACK_CLOSED:
-			free_imbuf(buf);
-			printf("Client disconnected\n");
-		break;
-	/*	case LWS_CALLBACK_GET_THREAD_ID:
-			return pthread_self();
-		break;*/
-		default:
-		//	DBG("Improto unknown reason: %d\n", reason);
-		break;
-	}
-
-	return 0;
-}
-
 //**************************************************************************//
 /* list of supported protocols and callbacks */
 //**************************************************************************//
@@ -555,13 +521,6 @@ static struct libwebsocket_protocols protocols[] = {
 		my_protocol_callback,		// callback
 		sizeof(per_session_data),	// per_session_data_size
 		MESSAGE_LEN,				// max frame size / rx buffer
-		0, NULL, 0, 0
-	},
-	{
-		"image-protocol",
-		improto_callback,
-		sizeof(imbuf),
-		100000,
 		0, NULL, 0, 0
 	},
 	{ NULL, NULL, 0, 0, 0, NULL, 0, 0} /* terminator */
@@ -579,10 +538,10 @@ void *websock_thread(_U_ void *buf){
 	int n = 0;
 	int opts = 0;
 	const char *iface = NULL;
-	int syslog_options = LOG_PID | LOG_PERROR;
+	//int syslog_options = LOG_PID | LOG_PERROR;
 	//unsigned int oldus = 0;
 	struct lws_context_creation_info info;
-	int debug_level = 7;
+	//int debug_level = 7;
 
 	if(pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL)){
 		force_exit = 1;
@@ -593,11 +552,11 @@ void *websock_thread(_U_ void *buf){
 	info.port = 9999;
 
 	/* we will only try to log things according to our debug_level */
-	setlogmask(LOG_UPTO (LOG_DEBUG));
-	openlog("lwsts", syslog_options, LOG_DAEMON);
+	//setlogmask(LOG_UPTO (LOG_DEBUG));
+	//openlog("lwsts", syslog_options, LOG_DAEMON);
 
 	/* tell the library what debug level to emit and to send it to syslog */
-	lws_set_log_level(debug_level, lwsl_emit_syslog);
+	//lws_set_log_level(debug_level, lwsl_emit_syslog);
 
 	info.iface = iface;
 	info.protocols = protocols;
@@ -615,9 +574,16 @@ void *websock_thread(_U_ void *buf){
 		force_exit = 1;
 		return NULL;
 	}
-
+	//int oldms = 0;
 	while(n >= 0 && !force_exit){
-		n = libwebsocket_service(context, 500);
+		//struct timeval tv;
+		//gettimeofday(&tv, NULL);
+		//int ms = (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
+		//if((ms - oldms) > 50){
+		//	libwebsocket_callback_on_writable_all_protocol(protocols);
+		//	oldms = ms;
+		//}
+		n = libwebsocket_service(context, 50);
 	}//while n>=0
 	libwebsocket_context_destroy(context);
 	lwsl_notice("libwebsockets-test-server exited cleanly\n");
@@ -626,19 +592,27 @@ void *websock_thread(_U_ void *buf){
 	return NULL;
 }
 
+//#if 0
 static inline void main_proc(){
 	DBG("main proc");
-	pthread_t w_thread, s_thread;
+	pthread_t s_thread, w_thread;
 	pthread_create(&w_thread, NULL, websock_thread, NULL);
 	pthread_create(&s_thread, NULL, steppers_thread, NULL);
-
+	setup_pins();
+//    int i = 0, j = 1;
 	while(!force_exit){
+/*		if(++i == 1000){
+			i = 0;
+			Xmove(j, 50);
+			j = (j > 0) ? -1 : 1;
+		}
+*/
 		pthread_mutex_lock(&command_mutex);
 		if(data_in_buf) process_buf(cmd_buf);
 		data_in_buf = 0;
 		pthread_mutex_unlock(&command_mutex);
-		usleep(100); // give another treads some time to fill buffer
-	}
+		usleep(1000); // give another treads some time to fill buffer
+	} 
 	DBG("stop threads");
 	pthread_cancel(s_thread); // cancel steppers' thread
 	pthread_cancel(w_thread);
@@ -651,6 +625,16 @@ static inline void main_proc(){
 	pthread_join(w_thread, NULL); // wait for closing of libsockets thread
 	DBG("return main_proc");
 }
+//#endif
+/*
+static inline void main_proc(){
+    pthread_t s_thread;
+    pthread_create(&s_thread, NULL, steppers_thread, NULL);
+    setup_pins();
+    Xmove(-1, 100);
+    pthread_join(s_thread, NULL);
+}
+*/
 
 //**************************************************************************//
 int main(_U_ int argc, _U_ char **argv){
@@ -658,9 +642,6 @@ int main(_U_ int argc, _U_ char **argv){
 	signal(SIGINT, sighandler);		// ctrl+C
 	signal(SIGQUIT, SIG_IGN);		// ctrl+\  .
 	signal(SIGTSTP, SIG_IGN);		// ctrl+Z
-
-	setup_pins();
-
 	while(1){
 		if(force_exit) return 0;
 		pid_t childpid = fork();
